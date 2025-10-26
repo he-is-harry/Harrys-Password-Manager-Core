@@ -1,0 +1,28 @@
+[package]
+name = "harrys-password-manager-core"
+version = "1.0.0"
+edition = "2024"
+description = "The core cryptographic functionality for Harry's password manager."
+repository = "https://github.com/he-is-harry/Harrys-Password-Manager-Core"
+license = "MIT OR Apache-2.0"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+wasm = ["wasm-bindgen", "getrandom/js", "fips203-rust/wasm"]
+
+[dependencies]
+fips203-rust = { path = "../FIPS203-Rust" } # fips203-rust requires getrandom 0.3
+rand = "0.9"
+argon2 = "0.5" # argon2 requires getrandom 0.2
+getrandom = "0.2"
+hkdf = "0.12"
+sha3 = "0.10"
+chacha20poly1305 = "0.10"
+subtle = { version = "2.6", default-features = false, features = ["const-generics"] }
+wasm-bindgen = { version = "0.2", optional = true }
+
+
+
