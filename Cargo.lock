@@ -187,6 +187,7 @@ dependencies = [
  "sha3",
  "subtle",
  "wasm-bindgen",
+ "zeroize",
 ]
 
 [[package]]

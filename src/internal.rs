@@ -1,12 +1,14 @@
 use argon2::Argon2;
 use chacha20poly1305::aead::{Aead, AeadMutInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
+use fips203_rust::types::{CipherText, DecapsKey, EncapsKey};
 use fips203_rust::{MlKem, MlKemParams::MlKem768};
-use rand::rngs::OsRng;
 use hkdf::Hkdf;
+use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, TryRngCore};
 use sha3::Sha3_256;
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 use std::cmp::max;
 
 use crate::errors::{DecryptError, EncryptError, PasswordGeneratorError};
@@ -16,11 +18,13 @@ const UPPERCASE_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const NUMBERS: &[u8] = b"0123456789";
 const SYMBOLS: &[u8] = b"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct KeyPair {
-	pub encryption_key: Vec<u8>,
-	pub decryption_key: Vec<u8>,
+    pub encryption_key: Vec<u8>,
+    pub decryption_key: Vec<u8>,
 }
 
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
 pub struct EncryptedPassword {
     pub argon2_salt: Vec<u8>,
     pub hkdf_salt: Vec<u8>,
@@ -31,10 +35,13 @@ pub struct EncryptedPassword {
 }
 
 pub(crate) fn keygen_internal() -> Result<KeyPair, rand::rand_core::OsError> {
-	let kem = MlKem::new(MlKem768);
-	let (encryption_key, decryption_key) = kem.keygen()?;
+    let kem = MlKem::new(MlKem768);
+    let (encryption_key, decryption_key) = kem.keygen()?;
 
-	Ok(KeyPair { encryption_key, decryption_key })
+    Ok(KeyPair {
+        encryption_key: encryption_key.into_bytes(),
+        decryption_key: decryption_key.into_bytes(),
+    })
 }
 
 pub(crate) fn encrypt_password_internal(
@@ -44,45 +51,46 @@ pub(crate) fn encrypt_password_internal(
 ) -> Result<EncryptedPassword, EncryptError> {
     // 1. Generate salt for Argon2id
     let mut argon2_salt = vec![0u8; 16];
-	OsRng.try_fill_bytes(&mut argon2_salt)?;
+    OsRng.try_fill_bytes(&mut argon2_salt)?;
 
     // 2. Generate salt for HKDF
     let mut hkdf_salt = vec![0u8; 16];
-	OsRng.try_fill_bytes(&mut hkdf_salt)?;
+    OsRng.try_fill_bytes(&mut hkdf_salt)?;
 
     // 3. Generate shared secret key and ciphertext using ML-KEM
     let kem = MlKem::new(MlKem768);
-    let (shared_secret, kem_ciphertext) = kem
-        .encaps(encryption_key)?;
+    let (shared_secret, kem_ciphertext) = kem.encaps(&EncapsKey::from_slice(encryption_key))?;
 
     // 4. Argon2id hash of master password using salt to get key
     let argon2 = Argon2::default();
-    let mut argon2_key = [0u8; 32];
-    argon2.hash_password_into(master_password, &argon2_salt, &mut argon2_key)?;
+    let mut argon2_key = Zeroizing::new([0u8; 32]);
+    argon2.hash_password_into(master_password, &argon2_salt, &mut *argon2_key)?;
 
     // 5. Generate random nonce for KEM ciphertext
     let mut kem_nonce = vec![0u8; 12];
-	OsRng.try_fill_bytes(&mut kem_nonce)?;
+    OsRng.try_fill_bytes(&mut kem_nonce)?;
 
     // 6. AEAD encrypt the KEM ciphertext with nonce and Argon2id key
-    let kem_aead = ChaCha20Poly1305::new(Key::from_slice(&argon2_key));
+    let kem_aead = ChaCha20Poly1305::new(Key::from_slice(&*argon2_key));
+    let kem_ciphertext_bytes = Zeroizing::new(kem_ciphertext.into_bytes());
     let kem_ciphertext_result = kem_aead
-        .encrypt(Nonce::from_slice(&kem_nonce), kem_ciphertext.as_ref())?;
+        .encrypt(Nonce::from_slice(&kem_nonce), kem_ciphertext_bytes.as_ref())?;
 	let kem_ciphertext_enc: [u8; 1104] = kem_ciphertext_result.as_slice().try_into()?;
 
     // 7. Create HKDF data encryption key from shared secret key
-    let hk = Hkdf::<Sha3_256>::new(Some(&hkdf_salt), &shared_secret);
-    let mut hkdf_key = [0u8; 32];
-    hk.expand(b"password-encryption", &mut hkdf_key)?;
+    let shared_secret_bytes = Zeroizing::new(shared_secret.into_bytes());
+    let hk = Hkdf::<Sha3_256>::new(Some(&hkdf_salt), &*shared_secret_bytes);
+    let mut hkdf_key = Zeroizing::new([0u8; 32]);
+    hk.expand(b"password-encryption", &mut *hkdf_key)?;
 
     // 8. Generate random nonce for actual user password
     let mut password_nonce = vec![0u8; 12];
-	OsRng.try_fill_bytes(&mut password_nonce)?;
+    OsRng.try_fill_bytes(&mut password_nonce)?;
 
     // 9. AEAD encrypt the user password with nonce and HKDF key
-    let pw_aead = ChaCha20Poly1305::new(Key::from_slice(&hkdf_key));
-    let password_ciphertext = pw_aead
-        .encrypt(Nonce::from_slice(&password_nonce), actual_password)?;
+    let pw_aead = ChaCha20Poly1305::new(Key::from_slice(&*hkdf_key));
+    let password_ciphertext =
+        pw_aead.encrypt(Nonce::from_slice(&password_nonce), actual_password)?;
 
     // 10. Return object containing salts, encrypted outputs, and nonces
     Ok(EncryptedPassword {
@@ -99,36 +107,47 @@ pub(crate) fn decrypt_password_internal(
     master_password: &[u8],
     kem_private_key: &[u8],
     encrypted_data: &EncryptedPassword,
-) -> Result<Vec<u8>, DecryptError> {
+) -> Result<Zeroizing<Vec<u8>>, DecryptError> {
     // 1. Derive Argon2id key from master password
     let argon2 = Argon2::default();
-    let mut argon2_key = [0u8; 32];
-    let _ = argon2.hash_password_into(master_password, &encrypted_data.argon2_salt, &mut argon2_key);
+    let mut argon2_key = Zeroizing::new([0u8; 32]);
+    let _ = argon2.hash_password_into(
+        master_password,
+        &encrypted_data.argon2_salt,
+        &mut *argon2_key,
+    );
 
     // 2. AEAD decrypt KEM ciphertext using Argon2id key
-    let mut kem_aead = ChaCha20Poly1305::new(Key::from_slice(&argon2_key));
-	let mut kem_ciphertext: Vec<u8> = encrypted_data.kem_ciphertext.to_vec();
-	let _ = kem_aead.decrypt_in_place(Nonce::from_slice(&encrypted_data.kem_nonce), b"", &mut kem_ciphertext);
+    let mut kem_aead = ChaCha20Poly1305::new(Key::from_slice(&*argon2_key));
+    let mut kem_ciphertext = Zeroizing::new(encrypted_data.kem_ciphertext.to_vec());
+    let _ = kem_aead.decrypt_in_place(
+        Nonce::from_slice(&encrypted_data.kem_nonce),
+        b"",
+        &mut *kem_ciphertext,
+    );
 
     // 3. Decapsulate shared secret using ML-KEM private key
     let kem = MlKem::new(MlKem768);
-	// Since AEAD will always validate the encryption, we can be sure that the size will be exactly 1088 bytes
+    // Since AEAD will always validate the encryption, we can be sure that the size will be exactly 1088 bytes
     // - This fact derives from the source code of ChaCha20Poly1305 where it will not run the stream cipher
     // if the verification fails
-    let shared_secret = kem.decaps(kem_private_key, &kem_ciphertext[0..1088]);
+    let shared_secret = kem.decaps(&DecapsKey::from_slice(kem_private_key), &CipherText::from_slice(&kem_ciphertext[0..1088]));
 
     // 4. Derive HKDF key from shared secret
-    let hk = Hkdf::<Sha3_256>::new(Some(&encrypted_data.hkdf_salt), &shared_secret);
-    let mut hkdf_key = [0u8; 32];
-    let _ = hk.expand(b"password-encryption", &mut hkdf_key);
+    let shared_secret_bytes = Zeroizing::new(shared_secret.into_bytes());
+    let hk = Hkdf::<Sha3_256>::new(Some(&encrypted_data.hkdf_salt), &*shared_secret_bytes);
+    let mut hkdf_key = Zeroizing::new([0u8; 32]);
+    let _ = hk.expand(b"password-encryption", &mut *hkdf_key);
 
     // 5. AEAD decrypt actual password using HKDF key
-    let pw_aead = ChaCha20Poly1305::new(Key::from_slice(&hkdf_key));
+    let pw_aead = ChaCha20Poly1305::new(Key::from_slice(&*hkdf_key));
     let actual_password = pw_aead
         .decrypt(
             Nonce::from_slice(&encrypted_data.password_nonce),
             encrypted_data.password_ciphertext.as_ref(),
-        ).map_err(|_| DecryptError);
+        )
+        .map(|password_vec| Zeroizing::new(password_vec))
+        .map_err(|_| DecryptError);
 
     actual_password
 }
@@ -161,7 +180,9 @@ impl Default for PasswordGeneratorOptions {
     }
 }
 
-pub(crate) fn generate_password_internal(options: Option<PasswordGeneratorOptions>) -> Result<String, PasswordGeneratorError> {
+pub(crate) fn generate_password_internal(
+    options: Option<PasswordGeneratorOptions>,
+) -> Result<Zeroizing<String>, PasswordGeneratorError> {
     let options = options.unwrap_or_default();
 
     let length_option = options.length;
@@ -197,13 +218,18 @@ pub(crate) fn generate_password_internal(options: Option<PasswordGeneratorOption
     if charset.is_empty() {
         return Err(PasswordGeneratorError::NoneSelected);
     }
-    if let Some(length) = length_option && min_chars > length {
-        return Err(PasswordGeneratorError::TooManyRequired { required: min_chars, length: length })
+    if let Some(length) = length_option
+        && min_chars > length
+    {
+        return Err(PasswordGeneratorError::TooManyRequired {
+            required: min_chars,
+            length: length,
+        });
     }
     // Define the length
     let length = length_option.unwrap_or_else(|| max(12, min_chars));
 
-    let mut password_chars: Vec<u8> = Vec::with_capacity(length);
+    let mut password_chars = Vec::with_capacity(length);
     let mut rng = rand::rng();
 
     // Ensure minimum requirements
@@ -236,7 +262,7 @@ pub(crate) fn generate_password_internal(options: Option<PasswordGeneratorOption
     // Shuffle the password to randomize the positions of the minimum required characters
     password_chars.shuffle(&mut rng);
 
-    Ok(String::from_utf8(password_chars).expect("Invalid UTF-8 character"))
+    Ok(Zeroizing::new(String::from_utf8(password_chars).expect("Invalid UTF-8 character")))
 }
 
 #[cfg(test)]
@@ -245,12 +271,17 @@ mod tests {
 
     #[test]
     fn test_generate_password_default() {
-        let password = generate_password_internal(None).expect("Password generation should not fail");
+        let password =
+            generate_password_internal(None).expect("Password generation should not fail");
         assert_eq!(password.len(), 12);
         assert!(password.chars().any(|c| c.is_ascii_digit()));
         assert!(password.chars().any(|c| c.is_ascii_uppercase()));
         assert!(password.chars().any(|c| c.is_ascii_lowercase()));
-        assert!(password.chars().any(|c| SYMBOLS.iter().any(|&s_char| s_char == (c as u8))));
+        assert!(
+            password
+                .chars()
+                .any(|c| SYMBOLS.iter().any(|&s_char| s_char == (c as u8)))
+        );
     }
 
     #[test]
@@ -259,7 +290,8 @@ mod tests {
             length: Some(20),
             ..Default::default()
         };
-        let password = generate_password_internal(Some(options)).expect("Password generation should not fail");
+        let password =
+            generate_password_internal(Some(options)).expect("Password generation should not fail");
         assert_eq!(password.len(), 20);
     }
 
@@ -270,7 +302,8 @@ mod tests {
             min_numbers: Some(0),
             ..Default::default()
         };
-        let password = generate_password_internal(Some(options)).expect("Password generation should not fail");
+        let password =
+            generate_password_internal(Some(options)).expect("Password generation should not fail");
         assert!(!password.chars().any(|c| c.is_ascii_digit()));
     }
 
@@ -287,7 +320,8 @@ mod tests {
             min_lowercase: Some(2),
             min_symbols: Some(2),
         };
-        let password = generate_password_internal(Some(options)).expect("Password generation should not fail");
+        let password =
+            generate_password_internal(Some(options)).expect("Password generation should not fail");
         assert_eq!(password.len(), 10);
 
         let num_numbers = password.chars().filter(|c| c.is_ascii_digit()).count();
@@ -314,7 +348,8 @@ mod tests {
             min_lowercase: Some(3),
             min_symbols: Some(2),
         };
-        let password = generate_password_internal(Some(options)).expect("Password generation should not fail");
+        let password =
+            generate_password_internal(Some(options)).expect("Password generation should not fail");
         assert_eq!(password.len(), 10);
 
         let num_numbers = password.chars().filter(|c| c.is_ascii_digit()).count();
@@ -341,7 +376,10 @@ mod tests {
             length: Some(10),
         };
         let password = generate_password_internal(Some(options));
-        assert!(matches!(password, Err(PasswordGeneratorError::NoneSelected)));
+        assert!(matches!(
+            password,
+            Err(PasswordGeneratorError::NoneSelected)
+        ));
     }
 
     #[test]
@@ -358,28 +396,47 @@ mod tests {
             length: Some(10),
         };
         let password = generate_password_internal(Some(options));
-        assert!(matches!(password, Err(PasswordGeneratorError::TooManyRequired { required: 14, length: 10 })));
+        assert!(matches!(
+            password,
+            Err(PasswordGeneratorError::TooManyRequired {
+                required: 14,
+                length: 10
+            })
+        ));
     }
 
     #[test]
     fn test_roundtrip() {
-		let key_pair = keygen_internal().expect("random generation for key should not fail");
-		let master_password = b"master password";
-		let user_password = b"secret";
-		let encrypted_password = encrypt_password_internal(master_password, &key_pair.encryption_key, user_password).expect("encryption should not fail");
-		let decrypted_password = decrypt_password_internal(master_password, &key_pair.decryption_key, &encrypted_password).expect("decryption should not fail");
+        let key_pair = keygen_internal().expect("random generation for key should not fail");
+        let master_password = b"master password";
+        let user_password = b"secret";
+        let encrypted_password =
+            encrypt_password_internal(master_password, &key_pair.encryption_key, user_password)
+                .expect("encryption should not fail");
+        let decrypted_password = decrypt_password_internal(
+            master_password,
+            &key_pair.decryption_key,
+            &encrypted_password,
+        )
+        .expect("decryption should not fail");
 
-		assert_eq!(user_password, decrypted_password.as_slice());
+        assert_eq!(user_password, decrypted_password.as_slice());
     }
 
-	#[test]
-	fn test_return_an_error_at_end() {
-		let key_pair = keygen_internal().expect("random generation for key should not fail");
-		let master_password = b"master password";
-		let user_password = b"secret";
-		let encrypted_password = encrypt_password_internal(master_password, &key_pair.encryption_key, user_password).expect("encryption should not fail");
-		let decrypted_password = decrypt_password_internal(b"wrong password", &key_pair.decryption_key, &encrypted_password);
+    #[test]
+    fn test_return_an_error_at_end() {
+        let key_pair = keygen_internal().expect("random generation for key should not fail");
+        let master_password = b"master password";
+        let user_password = b"secret";
+        let encrypted_password =
+            encrypt_password_internal(master_password, &key_pair.encryption_key, user_password)
+                .expect("encryption should not fail");
+        let decrypted_password = decrypt_password_internal(
+            b"wrong password",
+            &key_pair.decryption_key,
+            &encrypted_password,
+        );
 
-		assert!(matches!(decrypted_password, Err(DecryptError)));
-	}
+        assert!(matches!(decrypted_password, Err(DecryptError)));
+    }
 }

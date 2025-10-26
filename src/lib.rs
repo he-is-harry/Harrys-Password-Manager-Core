@@ -1,9 +1,10 @@
+use zeroize::Zeroizing;
 #[cfg(feature = "wasm")]
 use wasm_bindgen::prelude::*;
 
+use crate::internal::{decrypt_password_internal, encrypt_password_internal, generate_password_internal, keygen_internal, EncryptedPassword, KeyPair, PasswordGeneratorOptions};
 #[cfg(not(feature = "wasm"))]
 use crate::errors::{EncryptError, DecryptError, PasswordGeneratorError};
-use crate::internal::{decrypt_password_internal, encrypt_password_internal, generate_password_internal, keygen_internal, EncryptedPassword, KeyPair, PasswordGeneratorOptions};
 
 mod errors;
 mod internal;
@@ -27,12 +28,12 @@ pub fn decrypt_password(
     master_password: &[u8],
     kem_private_key: &[u8],
     encrypted_data: &EncryptedPassword,
-) -> Result<Vec<u8>, DecryptError> {
+) -> Result<Zeroizing<Vec<u8>>, DecryptError> {
     decrypt_password_internal(master_password, kem_private_key, encrypted_data)
 }
 
 #[cfg(not(feature = "wasm"))]
-pub fn generate_password(options: Option<PasswordGeneratorOptions>) -> Result<String, PasswordGeneratorError> {
+pub fn generate_password(options: Option<PasswordGeneratorOptions>) -> Result<Zeroizing<String>, PasswordGeneratorError> {
     generate_password_internal(options)
 }
 
@@ -55,11 +56,11 @@ pub fn decrypt_password(
     master_password: &[u8],
     kem_private_key: &[u8],
     encrypted_data: &EncryptedPassword,
-) -> Result<Vec<u8>, JsError> {
+) -> Result<Zeroizing<Vec<u8>>, JsError> {
     decrypt_password_internal(master_password, kem_private_key, encrypted_data).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
 
 #[cfg(feature = "wasm")]
-pub fn generate_password(options: Option<PasswordGeneratorOptions>) -> Result<String, JsError> {
+pub fn generate_password(options: Option<PasswordGeneratorOptions>) -> Result<Zeroizing<String>, JsError> {
     generate_password_internal(options).map_err(|e| wasm_bindgen::JsError::new(&e.to_string()))
 }
