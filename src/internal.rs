@@ -4,6 +4,7 @@ use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use fips203_rust::{MlKem, MlKemParams::MlKem768};
 use rand::rngs::OsRng;
 use hkdf::Hkdf;
+use rand::seq::SliceRandom;
 use rand::{Rng, TryRngCore};
 use sha3::Sha3_256;
 use std::cmp::max;
@@ -233,11 +234,7 @@ pub(crate) fn generate_password_internal(options: Option<PasswordGeneratorOption
     }
 
     // Shuffle the password to randomize the positions of the minimum required characters
-
-    for i in (1..password_chars.len()).rev() {
-        let j = rng.random_range(0..=i);
-        password_chars.swap(i, j);
-    }
+    password_chars.shuffle(&mut rng);
 
     Ok(String::from_utf8(password_chars).expect("Invalid UTF-8 character"))
 }
