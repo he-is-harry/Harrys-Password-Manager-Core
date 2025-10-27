@@ -8,40 +8,22 @@ use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, TryRngCore};
 use sha3::Sha3_256;
-use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroizing};
 use std::cmp::max;
 
 use crate::errors::{DecryptError, EncryptError, PasswordGeneratorError};
+use crate::types::{EncryptedPassword, KeyPair, PasswordGeneratorOptions};
 
 const LOWERCASE_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
 const UPPERCASE_CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const NUMBERS: &[u8] = b"0123456789";
 const SYMBOLS: &[u8] = b"!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct KeyPair {
-    pub encryption_key: Vec<u8>,
-    pub decryption_key: Vec<u8>,
-}
-
-#[derive(Clone, Zeroize, ZeroizeOnDrop)]
-pub struct EncryptedPassword {
-    pub argon2_salt: Vec<u8>,
-    pub hkdf_salt: Vec<u8>,
-    pub kem_nonce: Vec<u8>,
-    pub kem_ciphertext: [u8; 1104],
-    pub password_nonce: Vec<u8>,
-    pub password_ciphertext: Vec<u8>,
-}
-
 pub(crate) fn keygen_internal() -> Result<KeyPair, rand::rand_core::OsError> {
     let kem = MlKem::new(MlKem768);
     let (encryption_key, decryption_key) = kem.keygen()?;
 
-    Ok(KeyPair {
-        encryption_key: encryption_key.into_bytes(),
-        decryption_key: decryption_key.into_bytes(),
-    })
+    Ok(KeyPair { encryption_key: encryption_key.into_bytes(), decryption_key: decryption_key.into_bytes() })
 }
 
 pub(crate) fn encrypt_password_internal(
@@ -150,34 +132,6 @@ pub(crate) fn decrypt_password_internal(
         .map_err(|_| DecryptError);
 
     actual_password
-}
-
-pub struct PasswordGeneratorOptions {
-    pub length: Option<usize>,
-    pub include_numbers: Option<bool>,
-    pub include_uppercase: Option<bool>,
-    pub include_lowercase: Option<bool>,
-    pub include_symbols: Option<bool>,
-    pub min_numbers: Option<usize>,
-    pub min_uppercase: Option<usize>,
-    pub min_lowercase: Option<usize>,
-    pub min_symbols: Option<usize>,
-}
-
-impl Default for PasswordGeneratorOptions {
-    fn default() -> Self {
-        PasswordGeneratorOptions {
-            length: Some(12),
-            include_numbers: Some(true),
-            include_uppercase: Some(true),
-            include_lowercase: Some(true),
-            include_symbols: Some(true),
-            min_numbers: Some(1),
-            min_uppercase: Some(1),
-            min_lowercase: Some(1),
-            min_symbols: Some(1),
-        }
-    }
 }
 
 pub(crate) fn generate_password_internal(
