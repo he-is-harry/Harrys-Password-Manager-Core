@@ -7,23 +7,31 @@ repository = "https://github.com/he-is-harry/Harrys-Password-Manager-Core"
 license = "MIT OR Apache-2.0"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["cdylib", "rlib", "staticlib"]
 
 [features]
-default = []
+default = ["rust"]
 wasm = ["wasm-bindgen", "getrandom/js", "fips203-rust/wasm"]
+rust = []
+uniffi = ["dep:uniffi"]
 
 [dependencies]
 fips203-rust = { path = "../FIPS203-Rust" } # fips203-rust requires getrandom 0.3
 rand = "0.9"
-argon2 = "0.5" # argon2 requires getrandom 0.2
+argon2 = { version = "0.5", features = ["std"] } # argon2 requires getrandom 0.2
 getrandom = "0.2"
-hkdf = "0.12"
+hkdf = { version = "0.12", features = ["std"] }
 sha3 = "0.10"
-chacha20poly1305 = "0.10"
+chacha20poly1305 = { version = "0.10", features = ["std"] }
 subtle = { version = "2.6", default-features = false, features = ["const-generics"] }
 zeroize = { version = "1.8.0", features = ["zeroize_derive"] }
+thiserror = "2.0"
 wasm-bindgen = { version = "0.2", optional = true }
+uniffi = { version = "0.29", features = [ "cli" ], optional = true } # Match the version of uniffi that uniffi-bindgen-react-native supports
 
+[build-dependencies]
+uniffi = { version = "0.29", features = ["build"] }
 
-
+[[bin]]
+name = "uniffi-bindgen"
+path = "build/uniffi_bindgen.rs"

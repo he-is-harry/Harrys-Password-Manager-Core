@@ -8,10 +8,12 @@ use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, TryRngCore};
 use sha3::Sha3_256;
-use zeroize::{Zeroizing};
 use std::cmp::max;
+use zeroize::Zeroizing;
 
 use crate::errors::{DecryptError, EncryptError, PasswordGeneratorError};
+#[cfg(any(feature = "wasm", feature = "uniffi"))]
+use crate::types::EncryptedVaultKey;
 use crate::types::{EncryptedPassword, KeyPair, PasswordGeneratorOptions};
 
 const LOWERCASE_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
@@ -23,7 +25,10 @@ pub(crate) fn keygen_internal() -> Result<KeyPair, rand::rand_core::OsError> {
     let kem = MlKem::new(MlKem768);
     let (encryption_key, decryption_key) = kem.keygen()?;
 
-    Ok(KeyPair { encryption_key: encryption_key.into_bytes(), decryption_key: decryption_key.into_bytes() })
+    Ok(KeyPair {
+        encryption_key: encryption_key.into_bytes(),
+        decryption_key: decryption_key.into_bytes(),
+    })
 }
 
 pub(crate) fn encrypt_password_internal(
@@ -53,11 +58,14 @@ pub(crate) fn encrypt_password_internal(
     OsRng.try_fill_bytes(&mut kem_nonce)?;
 
     // 6. AEAD encrypt the KEM ciphertext with nonce and Argon2id key
+    #[allow(deprecated)]
+    // generic-array seems to have deprecated from_slice in 0.14, we need to wait for chacha20poly1305 to update
     let kem_aead = ChaCha20Poly1305::new(Key::from_slice(&*argon2_key));
     let kem_ciphertext_bytes = Zeroizing::new(kem_ciphertext.into_bytes());
-    let kem_ciphertext_result = kem_aead
-        .encrypt(Nonce::from_slice(&kem_nonce), kem_ciphertext_bytes.as_ref())?;
-	let kem_ciphertext_enc: [u8; 1104] = kem_ciphertext_result.as_slice().try_into()?;
+    #[allow(deprecated)]
+    let kem_ciphertext_result =
+        kem_aead.encrypt(Nonce::from_slice(&kem_nonce), kem_ciphertext_bytes.as_ref())?;
+    let kem_ciphertext_enc: [u8; 1104] = kem_ciphertext_result.as_slice().try_into()?;
 
     // 7. Create HKDF data encryption key from shared secret key
     let shared_secret_bytes = Zeroizing::new(shared_secret.into_bytes());
@@ -70,7 +78,9 @@ pub(crate) fn encrypt_password_internal(
     OsRng.try_fill_bytes(&mut password_nonce)?;
 
     // 9. AEAD encrypt the user password with nonce and HKDF key
+    #[allow(deprecated)]
     let pw_aead = ChaCha20Poly1305::new(Key::from_slice(&*hkdf_key));
+    #[allow(deprecated)]
     let password_ciphertext =
         pw_aead.encrypt(Nonce::from_slice(&password_nonce), actual_password)?;
 
@@ -100,8 +110,10 @@ pub(crate) fn decrypt_password_internal(
     );
 
     // 2. AEAD decrypt KEM ciphertext using Argon2id key
+    #[allow(deprecated)]
     let mut kem_aead = ChaCha20Poly1305::new(Key::from_slice(&*argon2_key));
     let mut kem_ciphertext = Zeroizing::new(encrypted_data.kem_ciphertext.to_vec());
+    #[allow(deprecated)]
     let _ = kem_aead.decrypt_in_place(
         Nonce::from_slice(&encrypted_data.kem_nonce),
         b"",
@@ -113,7 +125,10 @@ pub(crate) fn decrypt_password_internal(
     // Since AEAD will always validate the encryption, we can be sure that the size will be exactly 1088 bytes
     // - This fact derives from the source code of ChaCha20Poly1305 where it will not run the stream cipher
     // if the verification fails
-    let shared_secret = kem.decaps(&DecapsKey::from_slice(kem_private_key), &CipherText::from_slice(&kem_ciphertext[0..1088]));
+    let shared_secret = kem.decaps(
+        &DecapsKey::from_slice(kem_private_key),
+        &CipherText::from_slice(&kem_ciphertext[0..1088]),
+    );
 
     // 4. Derive HKDF key from shared secret
     let shared_secret_bytes = Zeroizing::new(shared_secret.into_bytes());
@@ -122,7 +137,9 @@ pub(crate) fn decrypt_password_internal(
     let _ = hk.expand(b"password-encryption", &mut *hkdf_key);
 
     // 5. AEAD decrypt actual password using HKDF key
+    #[allow(deprecated)]
     let pw_aead = ChaCha20Poly1305::new(Key::from_slice(&*hkdf_key));
+    #[allow(deprecated)]
     let actual_password = pw_aead
         .decrypt(
             Nonce::from_slice(&encrypted_data.password_nonce),
@@ -183,7 +200,7 @@ pub(crate) fn generate_password_internal(
     // Define the length
     let length = length_option.unwrap_or_else(|| max(12, min_chars));
 
-    let mut password_chars = Vec::with_capacity(length);
+    let mut password_chars = Vec::with_capacity(length as usize);
     let mut rng = rand::rng();
 
     // Ensure minimum requirements
@@ -209,14 +226,77 @@ pub(crate) fn generate_password_internal(
     }
 
     // Fill the rest of the password length
-    while password_chars.len() < length {
+    while password_chars.len() < length as usize {
         password_chars.push(charset[rng.random_range(0..charset.len())]);
     }
 
     // Shuffle the password to randomize the positions of the minimum required characters
     password_chars.shuffle(&mut rng);
 
-    Ok(Zeroizing::new(String::from_utf8(password_chars).expect("Invalid UTF-8 character")))
+    Ok(Zeroizing::new(
+        String::from_utf8(password_chars).expect("Invalid UTF-8 character"),
+    ))
+}
+
+#[cfg(any(feature = "wasm", feature = "uniffi"))]
+pub(crate) fn generate_encrypted_vault_key_internal(
+    master_password: &[u8],
+) -> Result<EncryptedVaultKey, EncryptError> {
+    // 1. Generate 32 bytes random vault key
+    let mut vault_key = Zeroizing::new([0u8; 32]);
+    OsRng.try_fill_bytes(&mut *vault_key)?;
+
+    // 2. Generate salt for Argon2id
+    let mut argon2_salt = vec![0u8; 16];
+    OsRng.try_fill_bytes(&mut argon2_salt)?;
+
+    // 3. Argon2id hash of master password using salt to get key
+    let argon2 = Argon2::default();
+    let mut argon2_key = Zeroizing::new([0u8; 32]);
+    argon2.hash_password_into(master_password, &argon2_salt, &mut *argon2_key)?;
+
+    // 4. Generate random nonce for vault key ciphertext
+    let mut vault_key_nonce = vec![0u8; 12];
+    OsRng.try_fill_bytes(&mut vault_key_nonce)?;
+
+    // 5. AEAD encrypt the vault key with nonce and Argon2id key
+    let aead = ChaCha20Poly1305::new(Key::from_slice(&*argon2_key));
+    let vault_key_ciphertext =
+        aead.encrypt(Nonce::from_slice(&vault_key_nonce), vault_key.as_ref())?;
+
+    // 6. Return object containing salt, encrypted output, and nonce
+    Ok(EncryptedVaultKey {
+        argon2_salt,
+        vault_key_ciphertext,
+        vault_key_nonce,
+    })
+}
+
+#[cfg(any(feature = "wasm", feature = "uniffi"))]
+pub(crate) fn decrypt_vault_key_internal(
+    master_password: &[u8],
+    encrypted_vault_key: &EncryptedVaultKey,
+) -> Result<Zeroizing<Vec<u8>>, DecryptError> {
+    // 1. Derive Argon2id key from master password
+    let argon2 = Argon2::default();
+    let mut argon2_key = Zeroizing::new([0u8; 32]);
+    let _ = argon2.hash_password_into(
+        master_password,
+        &encrypted_vault_key.argon2_salt,
+        &mut *argon2_key,
+    );
+
+    // 2. AEAD decrypt vault key ciphertext using Argon2id key
+    let aead = ChaCha20Poly1305::new(Key::from_slice(&*argon2_key));
+    let vault_key = aead
+        .decrypt(
+            Nonce::from_slice(&encrypted_vault_key.vault_key_nonce),
+            encrypted_vault_key.vault_key_ciphertext.as_ref(),
+        )
+        .map(|vault_key_vec| Zeroizing::new(vault_key_vec))
+        .map_err(|_| DecryptError);
+
+    vault_key
 }
 
 #[cfg(test)]
@@ -392,5 +472,57 @@ mod tests {
         );
 
         assert!(matches!(decrypted_password, Err(DecryptError)));
+    }
+
+    #[test]
+    #[cfg(any(feature = "wasm", feature = "uniffi"))]
+    fn test_generate_encrypted_vault_key() {
+        let master_password = b"master password";
+        let encrypted_key = generate_encrypted_vault_key_internal(master_password)
+            .expect("vault key generation should not fail");
+
+        assert_eq!(encrypted_key.argon2_salt.len(), 16);
+        assert_eq!(encrypted_key.vault_key_nonce.len(), 12);
+        // Ciphertext length = 32 (key) + 16 (tag) = 48
+        assert_eq!(encrypted_key.vault_key_ciphertext.len(), 48);
+
+        // Verify we can decrypt it
+        let argon2 = Argon2::default();
+        let mut argon2_key = Zeroizing::new([0u8; 32]);
+        argon2
+            .hash_password_into(
+                master_password,
+                &encrypted_key.argon2_salt,
+                &mut *argon2_key,
+            )
+            .expect("argon2 hashing should not fail");
+
+        let aead = ChaCha20Poly1305::new(Key::from_slice(&*argon2_key));
+        let decrypted_key = aead
+            .decrypt(
+                Nonce::from_slice(&encrypted_key.vault_key_nonce),
+                encrypted_key.vault_key_ciphertext.as_ref(),
+            )
+            .expect("decryption should not fail");
+
+        assert_eq!(decrypted_key.len(), 32);
+    }
+
+    #[test]
+    #[cfg(any(feature = "wasm", feature = "uniffi"))]
+    fn test_decrypt_vault_key() {
+        let master_password = b"master password";
+        let encrypted_key = generate_encrypted_vault_key_internal(master_password)
+            .expect("vault key generation should not fail");
+
+        let decrypted_key = decrypt_vault_key_internal(master_password, &encrypted_key)
+            .expect("authentication should not fail");
+
+        assert_eq!(decrypted_key.len(), 32);
+
+        // Test with wrong password
+        let wrong_password = b"wrong password";
+        let result = decrypt_vault_key_internal(wrong_password, &encrypted_key);
+        assert!(matches!(result, Err(DecryptError)));
     }
 }
