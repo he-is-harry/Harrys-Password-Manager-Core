@@ -241,3 +241,45 @@ impl EncryptedVaultKey {
         self.vault_key_nonce.clone()
     }
 }
+
+#[derive(Clone, Zeroize, ZeroizeOnDrop)]
+#[cfg(any(feature = "wasm", feature = "uniffi"))]
+#[cfg_attr(feature = "wasm", wasm_bindgen)]
+#[cfg_attr(feature = "uniffi", derive(uniffi::Object))]
+pub struct EncryptedDeviceKeyPair {
+    pub(crate) wrapping_key: Vec<u8>,
+    pub(crate) encryption_key_ciphertext: Vec<u8>,
+    pub(crate) encryption_key_nonce: Vec<u8>,
+    pub(crate) decryption_key_ciphertext: Vec<u8>,
+    pub(crate) decryption_key_nonce: Vec<u8>,
+}
+
+#[cfg(any(feature = "wasm", feature = "uniffi"))]
+#[cfg_attr(feature = "wasm", wasm_bindgen)]
+#[cfg_attr(feature = "uniffi", uniffi::export)]
+impl EncryptedDeviceKeyPair {
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
+    pub fn wrapping_key(&self) -> Vec<u8> {
+        self.wrapping_key.clone()
+    }
+
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
+    pub fn encryption_key_ciphertext(&self) -> Vec<u8> {
+        self.encryption_key_ciphertext.clone()
+    }
+
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
+    pub fn encryption_key_nonce(&self) -> Vec<u8> {
+        self.encryption_key_nonce.clone()
+    }
+
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
+    pub fn decryption_key_ciphertext(&self) -> Vec<u8> {
+        self.decryption_key_ciphertext.clone()
+    }
+
+    #[cfg_attr(feature = "wasm", wasm_bindgen(getter))]
+    pub fn decryption_key_nonce(&self) -> Vec<u8> {
+        self.decryption_key_nonce.clone()
+    }
+}

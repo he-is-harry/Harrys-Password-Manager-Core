@@ -10,9 +10,14 @@ pub mod uniffi_exports {
         UniffiDecryptError, UniffiEncryptError, UniffiKeygenError, UniffiPasswordGeneratorError,
     };
     use crate::internal::{
-        decrypt_password_internal, decrypt_vault_key_internal, encrypt_password_internal, generate_encrypted_vault_key_internal, generate_password_internal, keygen_internal
+        decrypt_device_key_internal, decrypt_password_internal, decrypt_vault_key_internal,
+        encrypt_password_internal, generate_encrypted_device_keys_internal,
+        generate_encrypted_vault_key_internal, generate_password_internal, keygen_internal,
     };
-    use crate::types::{EncryptedPassword, EncryptedVaultKey, KeyPair, PasswordGeneratorOptions};
+    use crate::types::{
+        EncryptedDeviceKeyPair, EncryptedPassword, EncryptedVaultKey, KeyPair,
+        PasswordGeneratorOptions,
+    };
 
     #[uniffi::export]
     pub fn keygen() -> Result<KeyPair, UniffiKeygenError> {
@@ -62,6 +67,21 @@ pub mod uniffi_exports {
         encrypted_vault_key: &EncryptedVaultKey,
     ) -> Result<Vec<u8>, UniffiDecryptError> {
         decrypt_vault_key_internal(master_password, encrypted_vault_key)
+            .map(|z| z.to_vec())
+            .map_err(Into::into)
+    }
+    #[uniffi::export]
+    pub fn generate_encrypted_device_keys() -> Result<EncryptedDeviceKeyPair, UniffiEncryptError> {
+        generate_encrypted_device_keys_internal().map_err(Into::into)
+    }
+
+    #[uniffi::export]
+    pub fn decrypt_device_keys(
+        wrapping_key: &[u8],
+        key_ciphertext: &[u8],
+        key_nonce: &[u8],
+    ) -> Result<Vec<u8>, UniffiDecryptError> {
+        decrypt_device_key_internal(wrapping_key, key_ciphertext, key_nonce)
             .map(|z| z.to_vec())
             .map_err(Into::into)
     }

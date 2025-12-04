@@ -13,7 +13,7 @@ use zeroize::Zeroizing;
 
 use crate::errors::{DecryptError, EncryptError, PasswordGeneratorError};
 #[cfg(any(feature = "wasm", feature = "uniffi"))]
-use crate::types::EncryptedVaultKey;
+use crate::types::{EncryptedDeviceKeyPair, EncryptedVaultKey};
 use crate::types::{EncryptedPassword, KeyPair, PasswordGeneratorOptions};
 
 const LOWERCASE_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz";
@@ -299,6 +299,63 @@ pub(crate) fn decrypt_vault_key_internal(
     vault_key
 }
 
+#[cfg(any(feature = "wasm", feature = "uniffi"))]
+pub(crate) fn generate_encrypted_device_keys_internal()
+-> Result<EncryptedDeviceKeyPair, EncryptError> {
+    // 1. Generate KEM key pair
+    let kem = MlKem::new(MlKem768);
+    let (encryption_key, decryption_key) = kem.keygen()?;
+
+    // 2. Generate random wrapping key
+    let mut wrapping_key = Zeroizing::new([0u8; 32]);
+    OsRng.try_fill_bytes(&mut *wrapping_key)?;
+
+    // 3. Generate nonces
+    let mut encryption_key_nonce = vec![0u8; 12];
+    OsRng.try_fill_bytes(&mut encryption_key_nonce)?;
+    let mut decryption_key_nonce = vec![0u8; 12];
+    OsRng.try_fill_bytes(&mut decryption_key_nonce)?;
+
+    // 4. Encrypt keys
+    let aead = ChaCha20Poly1305::new(Key::from_slice(&*wrapping_key));
+
+    let encryption_key_bytes = Zeroizing::new(encryption_key.into_bytes());
+    let decryption_key_bytes = Zeroizing::new(decryption_key.into_bytes());
+
+    let encryption_key_ciphertext = aead.encrypt(
+        Nonce::from_slice(&encryption_key_nonce),
+        encryption_key_bytes.as_ref(),
+    )?;
+    let decryption_key_ciphertext = aead.encrypt(
+        Nonce::from_slice(&decryption_key_nonce),
+        decryption_key_bytes.as_ref(),
+    )?;
+
+    Ok(EncryptedDeviceKeyPair {
+        wrapping_key: wrapping_key.to_vec(),
+        encryption_key_ciphertext,
+        encryption_key_nonce,
+        decryption_key_ciphertext,
+        decryption_key_nonce,
+    })
+}
+
+#[cfg(any(feature = "wasm", feature = "uniffi"))]
+pub(crate) fn decrypt_device_key_internal(
+    wrapping_key: &[u8],
+    key_ciphertext: &[u8],
+    key_nonce: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, DecryptError> {
+    let aead = ChaCha20Poly1305::new(Key::from_slice(wrapping_key));
+
+    let decrypted_key = aead
+        .decrypt(Nonce::from_slice(key_nonce), key_ciphertext)
+        .map(|decrypted_key_vec| Zeroizing::new(decrypted_key_vec))
+        .map_err(|_| DecryptError);
+
+    decrypted_key
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -524,5 +581,40 @@ mod tests {
         let wrong_password = b"wrong password";
         let result = decrypt_vault_key_internal(wrong_password, &encrypted_key);
         assert!(matches!(result, Err(DecryptError)));
+    }
+    #[test]
+    #[cfg(any(feature = "wasm", feature = "uniffi"))]
+    fn test_device_keys_roundtrip() {
+        let encrypted_keys = generate_encrypted_device_keys_internal()
+            .expect("device key generation should not fail");
+
+        assert_eq!(encrypted_keys.wrapping_key.len(), 32);
+
+        let encryption_key = decrypt_device_key_internal(
+            &encrypted_keys.wrapping_key,
+            &encrypted_keys.encryption_key_ciphertext,
+            &encrypted_keys.encryption_key_nonce,
+        )
+        .expect("device key decryption should not fail");
+
+        let decryption_key = decrypt_device_key_internal(
+            &encrypted_keys.wrapping_key,
+            &encrypted_keys.decryption_key_ciphertext,
+            &encrypted_keys.decryption_key_nonce,
+        )
+        .expect("device key decryption should not fail");
+
+        // Verify keys work by encrypting/decrypting a password
+        let master_password = b"master password";
+        let user_password = b"secret";
+
+        let encrypted_password =
+            encrypt_password_internal(master_password, &encryption_key, user_password)
+                .expect("encryption with derived key should not fail");
+        let decrypted_password =
+            decrypt_password_internal(master_password, &decryption_key, &encrypted_password)
+                .expect("decryption with derived key should not fail");
+
+        assert_eq!(user_password, decrypted_password.as_slice());
     }
 }
