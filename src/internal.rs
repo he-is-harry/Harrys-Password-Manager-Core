@@ -7,7 +7,7 @@ use hkdf::Hkdf;
 use rand::rngs::OsRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, TryRngCore};
-use sha3::Sha3_256;
+use sha3::{Digest, Sha3_256};
 use std::cmp::max;
 use zeroize::Zeroizing;
 
@@ -100,6 +100,19 @@ pub(crate) fn decrypt_password_internal(
     kem_private_key: &[u8],
     encrypted_data: &EncryptedPassword,
 ) -> Result<Zeroizing<Vec<u8>>, DecryptError> {
+    // For ML-KEM-768, k = 3, and the dk must be 768k + 96 = 2400 bytes
+    if kem_private_key.len() != 2400 {
+        return Err(DecryptError);
+    }
+    
+    // FIPS 203 check: SHA3-256(dk[384k : 768k + 32]) == dk[768k + 32 : 768k + 64]
+    let mut hasher = Sha3_256::new();
+    hasher.update(&kem_private_key[1152..2336]);
+    let hash = hasher.finalize();
+    if hash.as_slice() != &kem_private_key[2336..2368] {
+        return Err(DecryptError);
+    }
+    
     // 1. Derive Argon2id key from master password
     let argon2 = Argon2::default();
     let mut argon2_key = Zeroizing::new([0u8; 32]);
@@ -616,5 +629,46 @@ mod tests {
                 .expect("decryption with derived key should not fail");
 
         assert_eq!(user_password, decrypted_password.as_slice());
+    }
+
+    #[test]
+    fn test_decrypt_password_kem_key_length_check() {
+        let key_pair = keygen_internal().expect("random generation for key should not fail");
+        let master_password = b"master password";
+        let user_password = b"secret";
+        let encrypted_password =
+            encrypt_password_internal(master_password, &key_pair.encryption_key, user_password)
+                .expect("encryption should not fail");
+
+        let result = decrypt_password_internal(
+            master_password,
+            &key_pair.encryption_key,
+            &encrypted_password,
+        );
+
+        assert!(matches!(result, Err(DecryptError)));
+    }
+
+    #[test]
+    fn test_decrypt_password_kem_key_hash_check() {
+        let key_pair = keygen_internal().expect("random generation for key should not fail");
+        let master_password = b"master password";
+        let user_password = b"secret";
+        let encrypted_password =
+            encrypt_password_internal(master_password, &key_pair.encryption_key, user_password)
+                .expect("encryption should not fail");
+
+        // Corrupt the private key in the range [1152..2336]
+        // This should cause the hash check to fail
+        let mut corrupted_decryption_key = key_pair.decryption_key.clone();
+        corrupted_decryption_key[1200] ^= 0xFF;
+
+        let result = decrypt_password_internal(
+            master_password,
+            &corrupted_decryption_key,
+            &encrypted_password,
+        );
+
+        assert!(matches!(result, Err(DecryptError)));
     }
 }
