@@ -1,8 +1,7 @@
-use crate::errors::{DecryptError, EncryptError, PasswordGeneratorError};
+use harrys_password_manager_core::errors::{DecryptError, EncryptError, PasswordGeneratorError};
 use thiserror::Error;
 
-#[derive(Debug, Error)]
-#[derive(uniffi::Error)]
+#[derive(Debug, Error, uniffi::Error)]
 pub enum UniffiEncryptError {
     #[error("Random number generation failed: {0}")]
     OsRngError(String),
@@ -34,8 +33,7 @@ impl From<EncryptError> for UniffiEncryptError {
     }
 }
 
-#[derive(Debug, Error)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
+#[derive(Debug, Error, uniffi::Error)]
 pub enum UniffiDecryptError {
     #[error("Decryption failed")]
     DecryptionFailed,
@@ -47,8 +45,7 @@ impl From<DecryptError> for UniffiDecryptError {
     }
 }
 
-#[derive(Debug, Error)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
+#[derive(Debug, Error, uniffi::Error)]
 pub enum UniffiPasswordGeneratorError {
     #[error("Please specify at least one of uppercase, lowercase, number, or symbols.")]
     NoneSelected,
@@ -72,8 +69,7 @@ impl From<PasswordGeneratorError> for UniffiPasswordGeneratorError {
     }
 }
 
-#[derive(Debug, Error)]
-#[cfg_attr(feature = "uniffi", derive(uniffi::Error))]
+#[derive(Debug, Error, uniffi::Error)]
 pub enum UniffiKeygenError {
     #[error("Random number generation failed: {0}")]
     OsRngError(String),

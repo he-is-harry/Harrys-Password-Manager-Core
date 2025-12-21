@@ -1,0 +1,16 @@
+[package]
+edition = "2024"
+name = "harrys_password_manager_core_napi"
+version = "1.0.0"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = "3.0.0"
+napi-derive = "3.0.0"
+harrys-password-manager-core = { path = "../..", features = ["foreign"] }
+zeroize = { version = "1.8.0", features = ["zeroize_derive"] }
+
+[build-dependencies]
+napi-build = "2"

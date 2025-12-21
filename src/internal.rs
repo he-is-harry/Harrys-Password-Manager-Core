@@ -12,7 +12,7 @@ use std::cmp::max;
 use zeroize::Zeroizing;
 
 use crate::errors::{DecryptError, EncryptError, PasswordGeneratorError};
-#[cfg(any(feature = "wasm", feature = "uniffi"))]
+#[cfg(feature = "foreign")]
 use crate::types::{EncryptedDeviceKeyPair, EncryptedVaultKey};
 use crate::types::{EncryptedPassword, KeyPair, PasswordGeneratorOptions};
 
@@ -104,15 +104,16 @@ pub(crate) fn decrypt_password_internal(
     if kem_private_key.len() != 2400 {
         return Err(DecryptError);
     }
-    
+
     // FIPS 203 check: SHA3-256(dk[384k : 768k + 32]) == dk[768k + 32 : 768k + 64]
     let mut hasher = Sha3_256::new();
     hasher.update(&kem_private_key[1152..2336]);
     let hash = hasher.finalize();
+    #[allow(deprecated)]
     if hash.as_slice() != &kem_private_key[2336..2368] {
         return Err(DecryptError);
     }
-    
+
     // 1. Derive Argon2id key from master password
     let argon2 = Argon2::default();
     let mut argon2_key = Zeroizing::new([0u8; 32]);
@@ -251,7 +252,7 @@ pub(crate) fn generate_password_internal(
     ))
 }
 
-#[cfg(any(feature = "wasm", feature = "uniffi"))]
+#[cfg(feature = "foreign")]
 pub(crate) fn generate_encrypted_vault_key_internal(
     master_password: &[u8],
 ) -> Result<EncryptedVaultKey, EncryptError> {
@@ -285,7 +286,7 @@ pub(crate) fn generate_encrypted_vault_key_internal(
     })
 }
 
-#[cfg(any(feature = "wasm", feature = "uniffi"))]
+#[cfg(feature = "foreign")]
 pub(crate) fn decrypt_vault_key_internal(
     master_password: &[u8],
     encrypted_vault_key: &EncryptedVaultKey,
@@ -312,7 +313,7 @@ pub(crate) fn decrypt_vault_key_internal(
     vault_key
 }
 
-#[cfg(any(feature = "wasm", feature = "uniffi"))]
+#[cfg(feature = "foreign")]
 pub(crate) fn generate_encrypted_device_keys_internal()
 -> Result<EncryptedDeviceKeyPair, EncryptError> {
     // 1. Generate KEM key pair
@@ -353,7 +354,7 @@ pub(crate) fn generate_encrypted_device_keys_internal()
     })
 }
 
-#[cfg(any(feature = "wasm", feature = "uniffi"))]
+#[cfg(feature = "foreign")]
 pub(crate) fn decrypt_device_key_internal(
     wrapping_key: &[u8],
     key_ciphertext: &[u8],
@@ -545,7 +546,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "wasm", feature = "uniffi"))]
+    #[cfg(feature = "foreign")]
     fn test_generate_encrypted_vault_key() {
         let master_password = b"master password";
         let encrypted_key = generate_encrypted_vault_key_internal(master_password)
@@ -579,8 +580,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(feature = "wasm", feature = "uniffi"))]
-    fn test_decrypt_vault_key() {
+    #[cfg(feature = "foreign")]
+    fn test_vault_key_roundtrip() {
         let master_password = b"master password";
         let encrypted_key = generate_encrypted_vault_key_internal(master_password)
             .expect("vault key generation should not fail");
@@ -596,7 +597,7 @@ mod tests {
         assert!(matches!(result, Err(DecryptError)));
     }
     #[test]
-    #[cfg(any(feature = "wasm", feature = "uniffi"))]
+    #[cfg(feature = "foreign")]
     fn test_device_keys_roundtrip() {
         let encrypted_keys = generate_encrypted_device_keys_internal()
             .expect("device key generation should not fail");
