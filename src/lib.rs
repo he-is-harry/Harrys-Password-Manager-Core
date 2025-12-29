@@ -3,8 +3,9 @@ use zeroize::Zeroizing;
 use crate::errors::{DecryptError, EncryptError, PasswordGeneratorError};
 #[cfg(feature = "foreign")]
 use crate::internal::{
-    decrypt_device_key_internal, decrypt_vault_key_internal,
-    generate_encrypted_device_keys_internal, generate_encrypted_vault_key_internal,
+    decrypt_device_key_internal, decrypt_vault_key_internal, decrypt_network_packet_internal,
+    encrypt_network_packet_internal, generate_encrypted_device_keys_internal,
+    generate_encrypted_vault_key_internal, generate_network_shared_secret_key_internal
 };
 use crate::internal::{
     decrypt_password_internal, encrypt_password_internal, generate_password_internal,
@@ -71,4 +72,25 @@ pub fn decrypt_device_key(
     key_nonce: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, DecryptError> {
     decrypt_device_key_internal(wrapping_key, key_ciphertext, key_nonce)
+}
+
+#[cfg(feature = "foreign")]
+pub fn generate_network_shared_secret_key() -> Result<Zeroizing<Vec<u8>>, rand::rand_core::OsError> {
+    generate_network_shared_secret_key_internal()
+}
+
+#[cfg(feature = "foreign")]
+pub fn encrypt_network_packet(
+    data: String,
+    shared_secret_key: &[u8],
+) -> Result<Zeroizing<Vec<u8>>, EncryptError> {
+    encrypt_network_packet_internal(data, shared_secret_key)
+}
+
+#[cfg(feature = "foreign")]
+pub fn decrypt_network_packet(
+    encrypted_data: &[u8],
+    shared_secret_key: &[u8],
+) -> Result<Zeroizing<String>, DecryptError> {
+    decrypt_network_packet_internal(encrypted_data, shared_secret_key)
 }

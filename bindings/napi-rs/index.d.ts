@@ -34,15 +34,21 @@ export declare class KeyPair {
 
 export declare function decryptDeviceKeys(wrappingKey: Uint8Array, keyCiphertext: Uint8Array, keyNonce: Uint8Array): Buffer
 
+export declare function decryptNetworkPacket(encryptedData: Uint8Array, sharedSecretKey: Uint8Array): string
+
 export declare function decryptPassword(masterPassword: Uint8Array, kemPrivateKey: Uint8Array, encryptedData: EncryptedPassword): Buffer
 
 export declare function decryptVaultKey(masterPassword: Uint8Array, encryptedVaultKey: EncryptedVaultKey): Buffer
+
+export declare function encryptNetworkPacket(data: string, sharedSecretKey: Uint8Array): Buffer
 
 export declare function encryptPassword(masterPassword: Uint8Array, encryptionKey: Uint8Array, actualPassword: Uint8Array): EncryptedPassword
 
 export declare function generateEncryptedDeviceKeys(): EncryptedDeviceKeyPair
 
 export declare function generateEncryptedVaultKey(masterPassword: Uint8Array): EncryptedVaultKey
+
+export declare function generateNetworkSharedSecretKey(): Buffer
 
 export declare function generatePassword(options?: PasswordGeneratorOptions | undefined | null): string
 

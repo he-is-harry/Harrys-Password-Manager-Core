@@ -6,10 +6,13 @@ pub mod types;
 use harrys_password_manager_core::{
     decrypt_device_key as decrypt_device_key_internal,
     decrypt_password as decrypt_password_internal, decrypt_vault_key as decrypt_vault_key_internal,
+    decrypt_network_packet as decrypt_network_packet_internal,
     encrypt_password as encrypt_password_internal,
+    encrypt_network_packet as encrypt_network_packet_internal,
     generate_encrypted_device_keys as generate_encrypted_device_keys_internal,
     generate_encrypted_vault_key as generate_encrypted_vault_key_internal,
     generate_password as generate_password_internal, keygen as keygen_internal,
+    generate_network_shared_secret_key as generate_network_shared_secret_key_internal,
 };
 
 use crate::errors::{
@@ -96,5 +99,32 @@ pub fn decrypt_device_keys(
 ) -> Result<Vec<u8>, UniffiDecryptError> {
     decrypt_device_key_internal(wrapping_key, key_ciphertext, key_nonce)
         .map(|z| z.to_vec())
+        .map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn generate_network_shared_secret_key() -> Result<Vec<u8>, UniffiKeygenError> {
+    generate_network_shared_secret_key_internal()
+        .map(|z| z.to_vec())
+        .map_err(|e| UniffiKeygenError::OsRngError(e.to_string()))
+}
+
+#[uniffi::export]
+pub fn encrypt_network_packet(
+    data: String,
+    shared_secret_key: &[u8],
+) -> Result<Vec<u8>, UniffiEncryptError> {
+    encrypt_network_packet_internal(data, shared_secret_key)
+        .map(|z| z.to_vec())
+        .map_err(Into::into)
+}
+
+#[uniffi::export]
+pub fn decrypt_network_packet(
+    encrypted_data: &[u8],
+    shared_secret_key: &[u8],
+) -> Result<String, UniffiDecryptError> {
+    decrypt_network_packet_internal(encrypted_data, shared_secret_key)
+        .map(|z| z.to_string())
         .map_err(Into::into)
 }

@@ -370,6 +370,60 @@ pub(crate) fn decrypt_device_key_internal(
     decrypted_key
 }
 
+#[cfg(feature = "foreign")]
+pub(crate) fn generate_network_shared_secret_key_internal() -> Result<Zeroizing<Vec<u8>>, rand::rand_core::OsError> {
+    let mut key = vec![0u8; 32];
+    OsRng.try_fill_bytes(&mut key)?;
+    Ok(Zeroizing::new(key))
+}
+
+#[cfg(feature = "foreign")]
+pub(crate) fn encrypt_network_packet_internal(data: String, shared_secret_key: &[u8]) -> Result<Zeroizing<Vec<u8>>, EncryptError> {
+    // 1. Convert string to vector
+    let buffer = data.into_bytes();
+
+    // 2. Generate random nonce for vault key ciphertext
+    let mut packet_nonce = vec![0u8; 12];
+    OsRng.try_fill_bytes(&mut packet_nonce)?;
+    
+    // 3. AEAD encrypt the packet data with the shared secret key and random nonce
+    let aead = ChaCha20Poly1305::new(Key::from_slice(&*shared_secret_key));
+    let mut packet_ciphertext =
+        aead.encrypt(Nonce::from_slice(&packet_nonce), buffer.as_ref())?;
+
+    // 4. Append the nonce to the end of the ciphertext
+    packet_ciphertext.extend_from_slice(&packet_nonce);
+
+    Ok(Zeroizing::new(packet_ciphertext))
+}
+
+#[cfg(feature = "foreign")]
+pub(crate) fn decrypt_network_packet_internal(encrypted_data: &[u8], shared_secret_key: &[u8]) -> Result<Zeroizing<String>, DecryptError> {
+    // 1. Validate Minimum Length
+    // A valid packet must have a Nonce (12 bytes) and an Auth Tag (16 bytes).
+    if encrypted_data.len() < 12 + 16 {
+        return Err(DecryptError);
+    }
+
+    // 2. Extract the nonce from the end
+    let nonce_offset = encrypted_data.len() - 12;
+    let packet_nonce = Nonce::from_slice(&encrypted_data[nonce_offset..]);
+
+    // 3. AEAD decrypt the packet data with the shared secret key and nonce
+    let aead = ChaCha20Poly1305::new(Key::from_slice(shared_secret_key));
+
+    let decrypted_string = aead
+        .decrypt(packet_nonce, &encrypted_data[..nonce_offset])
+        .map_err(|_| DecryptError)
+        .and_then(|decrypted_data_vec| {
+            String::from_utf8(decrypted_data_vec)
+                .map(|decrypted_string| Zeroizing::new(decrypted_string))
+                .map_err(|_| DecryptError)
+        });
+
+    decrypted_string
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -671,5 +725,23 @@ mod tests {
         );
 
         assert!(matches!(result, Err(DecryptError)));
+    }
+
+    #[test]
+    #[cfg(feature = "foreign")]
+    fn test_network_encryption_roundtrip() {
+        let packet_data = String::from("{ \"password\": \"secret\" }");
+        let shared_secret_key = generate_network_shared_secret_key_internal()
+            .expect("shared secret key generation should not fail");
+
+        assert_eq!(shared_secret_key.len(), 32);
+
+        let encrypted_data = encrypt_network_packet_internal(packet_data.clone(), &shared_secret_key)
+            .expect("encryption should not fail");
+
+        let decrypted_data = decrypt_network_packet_internal(&encrypted_data, &shared_secret_key)
+            .expect("decryption should not fail");
+
+        assert_eq!(packet_data, *decrypted_data);
     }
 }
